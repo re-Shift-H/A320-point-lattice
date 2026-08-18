@@ -1,0 +1,85 @@
+'==============================================================================
+' import_points.CATScript
+' -----------------------
+' CATIA V5/V6 (VB) macro: import a CSV point lattice into a Part as geometric
+' points (HybridShapePointCoord) inside a new Geometrical Set.
+'
+' Expected CSV columns (header row allowed):
+'     ID,Station,Section,Side,X,Y,Z
+' Coordinates are read from the LAST THREE columns and assumed to be in mm.
+'
+' Usage:
+'   1. Open / create a CATPart, or run with "Create new part" below.
+'   2. Tools -> Macro -> Macros... -> Run this script.
+'   3. Pick a CSV (e.g. csv/Fuselage.csv).
+'   4. Points are created under a Geometrical Set named after the file.
+'==============================================================================
+Sub CATMain()
+
+    Dim partDocument1 As PartDocument
+    Set partDocument1 = CATIA.ActiveDocument
+    If (TypeName(partDocument1) <> "PartDocument") Then
+        MsgBox "Please open a Part document first.", vbExclamation
+        Exit Sub
+    End If
+
+    ' ---- choose CSV file ----
+    Dim strFile As String
+    strFile = CATIA.FileSelectionBox( _
+        "Select a point-lattice CSV", "*.csv", CatFileSelectionModeOpen)
+    If strFile = "" Then Exit Sub
+
+    ' ---- read file ----
+    Dim fso As Object, ts As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Set ts = fso.OpenTextFile(strFile, 1)   ' 1 = ForReading
+
+    Dim line As String
+    Dim parts() As String
+    Dim firstLine As Boolean
+    firstLine = True
+
+    Dim hb As Object
+    Set hb = partDocument1.Part.HybridBodies.Add()
+    hb.Name = "Points_" & fso.GetBaseName(strFile)
+
+    Dim hsFactory As Object
+    Set hsFactory = partDocument1.Part.HybridShapeFactory
+
+    Dim x As Double, y As Double, z As Double
+    Dim hpt As Object
+    Dim hptRef As Object
+    Dim n As Long
+    n = 0
+
+    Do While Not ts.AtEndOfStream
+        line = ts.ReadLine
+        If Trim(line) = "" Then GoTo nextLine
+        If firstLine Then
+            firstLine = False
+            ' skip header if present (first column is not numeric)
+            If Not IsNumeric(Left(Trim(line), 1)) Then GoTo nextLine
+        End If
+
+        parts = Split(line, ",")
+        If UBound(parts) >= 6 Then
+            x = CDbl(parts(UBound(parts) - 2))
+            y = CDbl(parts(UBound(parts) - 1))
+            z = CDbl(parts(UBound(parts)))
+
+            Set hpt = hsFactory.AddNewPointCoord(x, y, z)
+            hb.AppendHybridShape hpt
+            Set hptRef = partDocument1.Part.CreateReferenceFromObject(hpt)
+
+            Dim gs As Object
+            Set gs = partDocument1.Part.HybridShapes.Item(partDocument1.Part.HybridShapes.Count)
+            n = n + 1
+        End If
+nextLine:
+    Loop
+
+    ts.Close
+    partDocument1.Part.Update
+
+    MsgBox "Imported " & n & " points into Geometrical Set: " & hb.Name, vbInformation
+End Sub
