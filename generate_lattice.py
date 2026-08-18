@@ -101,26 +101,37 @@ def symmetric_span(y_root, half_span, n_st, include_center=False):
 # ===========================================================================
 def lofted_surface(span_pts, y_root, half_span, c_root, c_tip,
                    le_root_x, sweep_deg, dihedral_deg, z_root,
-                   m, p, t, n_chord):
-    """Build a structured lattice for a swept/tapered/dihedral lifting surface."""
+                   m, p, t, n_chord,
+                   twist_root_deg=0.0, twist_tip_deg=0.0):
+    """Build a structured lattice for a swept/tapered/dihedral lifting surface.
+
+    twist_root_deg / twist_tip_deg : geometric incidence (nose-up POSITIVE, deg)
+    at the root and tip. The section is twisted LINEARLY about its leading edge,
+    i.e. a washout of (twist_root_deg - twist_tip_deg) degrees from root to tip.
+    """
     xi, eta = naca4(m, p, t, n_chord)
     th = np.radians(dihedral_deg)
     n_c = len(xi)
+    R = half_span - y_root
 
     Xs, Ys, Zs, st, sec, side = [], [], [], [], [], []
     for i, (y_s, s) in enumerate(span_pts):
         r = abs(y_s) - y_root                     # radial span position (>= 0)
-        c = c_root + (c_tip - c_root) * r / (half_span - y_root)
+        c = c_root + (c_tip - c_root) * r / R
         x_le = le_root_x + r * np.tan(np.radians(sweep_deg))
         z_ref = z_root + r * np.tan(th)           # dihedral raises both tips
 
         side_sign = +1.0 if s in ('R', 'C') else -1.0
-        n_y = -side_sign * np.sin(th)             # section normal (inward)
-        n_z = np.cos(th)
 
-        X = x_le + xi * c
-        Y = y_s + eta * c * n_y
-        Z = z_ref + eta * c * n_z
+        # geometric twist: rotate the section about its leading edge
+        inc = np.radians(twist_root_deg + (twist_tip_deg - twist_root_deg) * r / R)
+        ca, sa = np.cos(inc), np.sin(inc)
+        ux = xi * ca + eta * sa                   # chordwise coefficient (-> X)
+        wn = -xi * sa + eta * ca                  # normal coefficient (-> Y/Z)
+
+        X = x_le + c * ux
+        Y = y_s + c * wn * (-side_sign * np.sin(th))
+        Z = z_ref + c * wn * np.cos(th)
 
         Xs.extend(X); Ys.extend(Y); Zs.extend(Z)
         st.extend([i] * n_c); sec.extend(range(n_c)); side.extend([s] * n_c)
@@ -202,6 +213,54 @@ def vertical_tail(n_st=10, n_chord=36):
 
 
 # ===========================================================================
+# 5b. Winglet (sharklet-style blended wingtip fin)
+# ===========================================================================
+def winglet(n_st=10, n_chord=30):
+    """Blended winglet at each wing tip: a near-vertical fin, canted outward,
+    swept back, tapering from the wing-tip chord to a smaller tip chord.
+
+    Sections use a thin symmetric airfoil (NACA 0010). The cant angle ramps from
+    0 (vertical, at the wing tip) to `cant_deg` via a smoothstep for a blended
+    junction. The wing-tip reference is duplicated from the Wing definition.
+    """
+    # wing-tip reference (must match the Wing block in build())
+    y_root, half_span = 1975.0, 17050.0
+    c_tip = 1400.0
+    le_root_x, sweep_deg = 11500.0, 25.0
+    dihedral_deg, z_root = 5.1, -500.0
+    R = half_span - y_root
+    x_le_tip = le_root_x + R * np.tan(np.radians(sweep_deg))
+    z_ref_tip = z_root + R * np.tan(np.radians(dihedral_deg))
+
+    H = 2400.0               # winglet height (mm)
+    cant_deg = 30.0          # outward cant from vertical (deg)
+    sweep_wl_deg = 50.0      # winglet leading-edge sweep (deg)
+    c_wl_tip = 650.0         # winglet tip chord (mm)
+
+    xi, eta = naca4(0.0, 0.0, 0.10, n_chord)   # NACA 0010, thin & symmetric
+    n_c = len(xi)
+    t = np.linspace(0.0, 1.0, n_st)
+    cant_t = np.radians(cant_deg) * (3.0 * t ** 2 - 2.0 * t ** 3)  # smoothstep
+
+    Xs, Ys, Zs, st, sec, side = [], [], [], [], [], []
+    for sign, sd in ((+1.0, 'R'), (-1.0, 'L')):
+        for i in range(n_st):
+            tt = t[i]
+            c = c_tip + (c_wl_tip - c_tip) * tt
+            x_ref = x_le_tip + tt * H * np.tan(np.radians(sweep_wl_deg))
+            y_ref = sign * (half_span + tt * H * np.sin(np.radians(cant_deg)))
+            z_ref = z_ref_tip + tt * H * np.cos(np.radians(cant_deg))
+            ca = np.cos(cant_t[i]); sa = np.sin(cant_t[i])
+            X = x_ref + xi * c
+            Y = y_ref + eta * c * ca             # thickness mostly outward
+            Z = z_ref - eta * c * sa
+            Xs.extend(X); Ys.extend(Y); Zs.extend(Z)
+            st.extend([i] * n_c); sec.extend(range(n_c)); side.extend([sd] * n_c)
+
+    return Xs, Ys, Zs, st, sec, side
+
+
+# ===========================================================================
 # 6. Engine nacelle (body of revolution, CFM56-5B class)
 # ===========================================================================
 def nacelle(x0, y0, z0, n_len=20, n_circ=24):
@@ -237,13 +296,19 @@ def build():
         y_root=1975.0, half_span=17050.0, c_root=7400.0, c_tip=1400.0,
         le_root_x=11500.0, sweep_deg=25.0, dihedral_deg=5.1, z_root=-500.0,
         m=0.02, p=0.4, t=0.12, n_chord=44,
+        twist_root_deg=3.0, twist_tip_deg=-2.0,
     )
     span = symmetric_span(wing['y_root'], wing['half_span'], 12)
     X, Y, Z, st, sec, side = lofted_surface(
         span, wing['y_root'], wing['half_span'], wing['c_root'], wing['c_tip'],
         wing['le_root_x'], wing['sweep_deg'], wing['dihedral_deg'], wing['z_root'],
-        wing['m'], wing['p'], wing['t'], wing['n_chord'])
+        wing['m'], wing['p'], wing['t'], wing['n_chord'],
+        wing['twist_root_deg'], wing['twist_tip_deg'])
     sheets['Wing'] = dict(X=X, Y=Y, Z=Z, Station=st, Section=sec, Side=side)
+
+    # ---- Winglet (sharklet-style blended wingtip) -------------------------
+    X, Y, Z, st, sec, side = winglet()
+    sheets['Winglet'] = dict(X=X, Y=Y, Z=Z, Station=st, Section=sec, Side=side)
 
     # ---- Horizontal tail (NACA 0012) --------------------------------------
     ht = dict(
@@ -305,6 +370,48 @@ def to_dataframes(sheets):
     return out
 
 
+def export_obj(sheets, path):
+    """Triangulate each structured lattice and write a single Wavefront OBJ.
+
+    Each component's lattice is treated as a Station x Section grid; quads are
+    split into triangles and Section is closed into a loop (a seam at Section 0
+    for the revolution surfaces, coincident for the closed airfoil loops).
+    Units stay in millimetres (OBJ is unit-less).
+    """
+    verts, faces = [], []
+    for name, d in sheets.items():
+        X = np.asarray(d['X']); Y = np.asarray(d['Y']); Z = np.asarray(d['Z'])
+        st = [int(v) for v in d['Station']]
+        sec = [int(v) for v in d['Section']]
+        side = [str(v) for v in d['Side']]
+
+        base = len(verts)
+        loc = {}
+        for k in range(len(X)):
+            loc[(side[k], st[k], sec[k])] = k
+            verts.append((float(X[k]), float(Y[k]), float(Z[k])))
+
+        for s in sorted(set(side)):
+            stations = sorted({st[k] for k in range(len(X)) if side[k] == s})
+            nsec = max(sec[k] for k in range(len(X)) if side[k] == s) + 1
+            for a, b in zip(stations, stations[1:]):
+                for j in range(nsec):
+                    j2 = (j + 1) % nsec
+                    q = (base + loc[(s, a, j)],
+                         base + loc[(s, b, j)],
+                         base + loc[(s, b, j2)],
+                         base + loc[(s, a, j2)])
+                    faces.append((q[0], q[1], q[2]))
+                    faces.append((q[0], q[2], q[3]))
+
+    with open(path, 'w') as f:
+        for x, y, z in verts:
+            f.write('v %.3f %.3f %.3f\n' % (x, y, z))
+        for a, b, c in faces:
+            f.write('f %d %d %d\n' % (a + 1, b + 1, c + 1))
+    return len(verts), len(faces)
+
+
 PARAMETERS = [
     ("Fuselage length", 37570, "37.57 m"),
     ("Fuselage max width", 3950, "3.95 m"),
@@ -314,6 +421,11 @@ PARAMETERS = [
     ("Wing tip chord", 1400, "1.40 m"),
     ("Wing LE sweep", 25.0, "deg (approx.)"),
     ("Wing dihedral", 5.1, "deg (approx.)"),
+    ("Wing root incidence", 3.0, "deg nose-up (approx.)"),
+    ("Wing tip incidence (washout)", -2.0, "deg, 5 deg washout root->tip"),
+    ("Winglet height", 2400, "2.40 m (sharklet-style)"),
+    ("Winglet cant", 30.0, "deg outward from vertical"),
+    ("Winglet tip chord", 650, "0.65 m"),
     ("Horizontal tail span", 12450, "12.45 m"),
     ("Vertical tail height", 6200, "6.20 m"),
     ("Nacelle max diameter", 2010, "2.01 m"),
@@ -321,36 +433,56 @@ PARAMETERS = [
 ]
 
 
+COMPONENTS = ['Fuselage', 'Wing', 'Winglet', 'H_Tail', 'V_Tail', 'Engine']
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     sheets = build()
     frames = to_dataframes(sheets)
 
-    # Excel workbook
+    # Excel workbook (fall back to a new name if the canonical file is open)
     xlsx = os.path.join(here, 'A320_point_lattice.xlsx')
-    with pd.ExcelWriter(xlsx, engine='openpyxl') as w:
-        params = pd.DataFrame([
-            {"Dimension": d, "Value (mm)": v, "Value (m)": u} for d, v, u in PARAMETERS
-        ])
-        params.to_excel(w, sheet_name='Parameters', index=False)
-        for name in ['Fuselage', 'Wing', 'H_Tail', 'V_Tail', 'Engine']:
-            frames[name].to_excel(w, sheet_name=name, index=False)
+    try:
+        with pd.ExcelWriter(xlsx, engine='openpyxl') as w:
+            params = pd.DataFrame([
+                {"Dimension": d, "Value (mm)": v, "Value (m)": u} for d, v, u in PARAMETERS
+            ])
+            params.to_excel(w, sheet_name='Parameters', index=False)
+            for name in COMPONENTS:
+                frames[name].to_excel(w, sheet_name=name, index=False)
+    except PermissionError:
+        xlsx = os.path.join(here, 'A320_point_lattice_v2.xlsx')
+        with pd.ExcelWriter(xlsx, engine='openpyxl') as w:
+            params = pd.DataFrame([
+                {"Dimension": d, "Value (mm)": v, "Value (m)": u} for d, v, u in PARAMETERS
+            ])
+            params.to_excel(w, sheet_name='Parameters', index=False)
+            for name in COMPONENTS:
+                frames[name].to_excel(w, sheet_name=name, index=False)
+        print("NOTE: A320_point_lattice.xlsx is open in another program; "
+              "wrote %s instead" % os.path.basename(xlsx))
 
     # CSVs
     csv_dir = os.path.join(here, 'csv')
     os.makedirs(csv_dir, exist_ok=True)
-    for name, df in frames.items():
-        df.to_csv(os.path.join(csv_dir, name + '.csv'), index=False)
+    for name in COMPONENTS:
+        frames[name].to_csv(os.path.join(csv_dir, name + '.csv'), index=False)
+
+    # Single triangulated OBJ (quick preview / mesh import into CAD)
+    obj_path = os.path.join(here, 'A320.obj')
+    nv, nf = export_obj(sheets, obj_path)
 
     print("Generated A320 point lattice:")
     total = 0
-    for name in ['Fuselage', 'Wing', 'H_Tail', 'V_Tail', 'Engine']:
+    for name in COMPONENTS:
         n = len(frames[name])
         total += n
         print(f"  {name:<10} {n:>6} points")
     print(f"  {'TOTAL':<10} {total:>6} points")
     print(f"\nWrote: {xlsx}")
     print(f"       {csv_dir}")
+    print(f"       {obj_path}  ({nv} verts, {nf} triangles)")
 
 
 if __name__ == '__main__':

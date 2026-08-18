@@ -15,12 +15,16 @@ ready for CATIA surface lofting (multi-section surface, NURBS skinning, cloud-to
 
 | 文件 / File | 说明 / Description |
 | --- | --- |
-| `generate_lattice.py` | 生成点阵的 Python 脚本（可改参数重新生成） |
+| `generate_lattice.py` | 点阵生成脚本（可改参数重新生成，含机翼扭转角 + 翼尖小翼） |
 | `A320_point_lattice.xlsx` | 点阵总表，每个部件一个 Sheet + 参数表 |
-| `csv/` | 每个部件一个 CSV，便于 CATIA 直接导入 |
-| `import_points.CATScript` | CATIA VBA 宏：把 CSV 批量导入为几何点 |
+| `csv/` | 每个部件一个 CSV，便于 CATIA 导入 |
+| `A320.obj` | 全机三角网格（用于快速预览 / 导入网格） |
+| `preview.png` | 全机渲染预览图 |
+| `build_in_catia.py` | **CATIA COM 自动化**：自动建点、样条线框、放样曲面 |
+| `import_points.CATScript` | CATIA VBA 宏：把 CSV 批量导入为几何点（手动备选） |
+| `preview.py` | 渲染 `A320.obj` 为 PNG（需 matplotlib） |
 
-部件 Sheets：`Fuselage`（机身）、`Wing`（机翼）、`H_Tail`（平尾）、`V_Tail`（垂尾）、`Engine`（发动机舱）。
+部件 Sheets：`Fuselage`（机身）、`Wing`（机翼）、`Winglet`（翼尖小翼）、`H_Tail`（平尾）、`V_Tail`（垂尾）、`Engine`（发动机舱）。
 
 ---
 
@@ -40,8 +44,6 @@ CATIA 中对应：`X → 长度 / Y → 宽度 / Z → 高度`（CATIA 默认绝
 
 ## 3. 表格列说明 / Sheet Columns
 
-每个部件 Sheet 的列：
-
 | 列 | 含义 |
 | --- | --- |
 | `ID` | 部件内唯一序号 |
@@ -58,12 +60,14 @@ CATIA 中对应：`X → 长度 / Y → 宽度 / Z → 高度`（CATIA 默认绝
 ## 4. 部件几何要点 / Component geometry
 
 - **机身 Fuselage**：绕 X 轴的回转体 + 椭圆截面（宽 3.95 m / 高 4.14 m），机头与尾锥按半径型线插值。
-- **机翼 Wing**：NACA 2412，后掠 25°，根弦 7.4 m → 梢弦 1.4 m，上反角 5.1°，半展长 17.05 m。
+- **机翼 Wing**：NACA 2412，后掠 25°，根弦 7.4 m → 梢弦 1.4 m，上反角 5.1°，半展长 17.05 m；
+  **几何扭转角（washout）**：根 +3°（抬头）线性扭转到梢 **-2°**（低头），共 5° 扭转。
+- **翼尖小翼 Winglet**：鲨鳍式（sharklet），高 2.4 m，外倾 30°，后掠 50°，梢弦 0.65 m，NACA 0010 薄对称翼型。
 - **平尾 H_Tail**：NACA 0012，展长 12.45 m，后掠 30°。
 - **垂尾 V_Tail**：NACA 0010 对称翼型，高 6.2 m，后掠 40°。
 - **发动机舱 Engine**：绕 X 轴的回转体（CFM56-5B 级别，最大直径 ≈ 2.01 m，长 ≈ 3.3 m），左右各一，吊挂在机翼下方。
 
-所有参数均集中在 `generate_lattice.py` 顶部各函数中，可随时调整。
+所有参数集中在 `generate_lattice.py` 各函数中，可随时调整。
 
 ---
 
@@ -71,30 +75,30 @@ CATIA 中对应：`X → 长度 / Y → 宽度 / Z → 高度`（CATIA 默认绝
 
 ```bash
 pip install -r requirements.txt
-python generate_lattice.py
+python generate_lattice.py     # 产出 xlsx + csv + obj
+python preview.py              # 可选：渲染预览图（需 matplotlib）
 ```
-
-输出：`A320_point_lattice.xlsx` 与 `csv/*.csv`。
 
 ---
 
 ## 6. 导入 CATIA / Import into CATIA
 
-### 方法 A：Excel 宏（推荐，直接建点 + 命名）
-1. 打开 CATIA（新建或打开一个 Part）。
-2. `工具 → 宏 → 宏...`（Tools → Macro → Macros），创建/导入 `import_points.CATScript`。
-3. 运行后选择 `csv/` 下某个 CSV（如 `Fuselage.csv`），脚本会新建几何图形集并把每个点
-   建成 `HybridShapePointCoord`。
-4. 之后可用 **多截面曲面** 或 **点云 → 网格 → 曲面** 生成蒙皮。
+### 方法 A：一键自动建模（推荐）
+在装有 CATIA V5（Windows）的机器上：
+```bash
+pip install pywin32
+python build_in_catia.py
+```
+脚本会**启动 CATIA**（或连接已运行的实例），自动：新建 Part → 导入全部点阵到几何图形集
+→ 建立截面闭合样条 + 展向引导样条 → **多截面放样曲面** → 适配视图。
 
-### 方法 B：Excel 点导入
-1. 打开一个 Part，进入 `Generative Shape Design`（创成式外形设计）。
-2. 插入几何图形集，`点` → `坐标点`，逐个输入（适合少量点）。
-3. 或用 CATIA 的 "Import Points" / 脚本批量导入 CSV。
+### 方法 B：Excel 宏（手动建点）
+1. 打开 CATIA Part，`工具 → 宏` 导入 `import_points.CATScript`，运行后选择 `csv/` 下某个 CSV，
+   自动把每个点建成 `HybridShapePointCoord`。
+2. 之后用 **多截面曲面**（Multi-Section Surface）选择各 `Station` 的截面环放样。
 
-### 方法 C：第三方点云工具
-把 CSV 另存为 `.asc` / `.xyz`（空格分隔 X Y Z），用 CATIA 的 **Digitized Shape Editor**（DSE）
-或 `Cloud import` 读入为点云，再做 mesh/曲面。
+### 方法 C：网格导入
+`A320.obj`（或另存为 STL）可直接 `File → Open` 作为网格查看。
 
 ---
 
@@ -104,13 +108,12 @@ python generate_lattice.py
 A320-point-lattice/
 ├── generate_lattice.py
 ├── A320_point_lattice.xlsx
-├── csv/
-│   ├── Fuselage.csv
-│   ├── Wing.csv
-│   ├── H_Tail.csv
-│   ├── V_Tail.csv
-│   └── Engine.csv
+├── A320.obj
+├── preview.png
+├── csv/            (Fuselage / Wing / Winglet / H_Tail / V_Tail / Engine .csv)
+├── build_in_catia.py
 ├── import_points.CATScript
+├── preview.py
 ├── requirements.txt
 └── README.md
 ```
@@ -123,8 +126,10 @@ A320-point-lattice/
 | --- | --- |
 | 机身长 | 37.57 m |
 | 机身最大宽 / 高 | 3.95 m / 4.14 m |
-| 翼展 | 34.10 m（鲨鳍小翼型为 35.8 m） |
+| 翼展 | 34.10 m（翼尖小翼外扩后 ≈ 36.5 m） |
 | 翼根 / 翼梢弦 | 7.4 m / 1.4 m |
+| 机翼根/梢安装角 | +3° / −2°（5° washout） |
+| 翼尖小翼高 / 外倾 | 2.4 m / 30° |
 | 平尾展长 | 12.45 m |
 | 垂尾高 | 6.2 m |
 | 发动机舱最大直径 | ≈ 2.01 m |
